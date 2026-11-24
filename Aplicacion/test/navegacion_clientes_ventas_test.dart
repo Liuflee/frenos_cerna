@@ -1,0 +1,867 @@
+import 'package:material_ui/material_ui.dart'; // Construye las vistas que utilizará la persona encargada.
+import 'package:flutter_test/flutter_test.dart'; // Verifica rutas y distribución sin escrituras reales.
+import 'package:shared_preferences/shared_preferences.dart'; // Aísla las ventas locales de prueba.
+import 'package:frenos_cerna/features/clientes/pagina_clientes.dart'; // Consulta la nueva columna de información.
+import 'package:frenos_cerna/features/clientes/pagina_ver_cliente.dart'; // Verifica la consulta sin edición.
+import 'package:frenos_cerna/features/clientes/pagina_editar_cliente.dart';
+import 'package:frenos_cerna/features/inicio/pagina_inicio.dart'; // Verifica las tarjetas de acceso.
+import 'package:frenos_cerna/features/ventas/data/ventas_repository.dart'; // Conserva fechas y relaciones reales.
+import 'package:frenos_cerna/features/ventas/data/ventas_pendientes_repository.dart'; // Conserva las pendientes de distintos días.
+import 'package:frenos_cerna/features/ventas/presentation/pagina_crear_ventas.dart'; // Verifica el acceso directo a registrar una venta.
+import 'package:frenos_cerna/features/ventas/presentation/pagina_detalle_venta.dart'; // Verifica Ver cliente desde ambos historiales.
+import 'package:frenos_cerna/features/ventas/presentation/pagina_ventas.dart'; // Verifica el alcance diario.
+import 'package:frenos_cerna/features/ventas/presentation/pagina_ventas_historial.dart'; // Verifica el historial completo.
+import 'package:frenos_cerna/features/vehiculos/pagina_vehiculos.dart';
+import 'package:frenos_cerna/features/vehiculos/pagina_detalle_vehiculo.dart';
+import 'package:frenos_cerna/shared/widgets/tabla_datos.dart'; // Inspecciona las filas que recibe la tabla compartida.
+
+void main() {
+  // Comprueba los cambios de navegación solicitados.
+  TestWidgetsFlutterBinding.ensureInitialized(); // Habilita el entorno de pruebas.
+  setUp(
+    () => SharedPreferences.setMockInitialValues({}),
+  ); // Evita mezclar ventas de distintas pruebas.
+  final cliente = Cliente(
+    id: '123',
+    nombre: 'Cliente consultado',
+    numero: '456',
+    ultimaVenta: '',
+    vehiculo: 'ABCD12',
+  ); // Define un perfil identificable por RUT.
+
+  for (final tamano in [const Size(1440, 1000), const Size(390, 844)]) {
+    // Comprueba escritorio y Android.
+    testWidgets('Ver cliente muestra información sin editar en $tamano', (
+      tester,
+    ) async {
+      // Conserva la disposición de la edición sin sus acciones.
+      tester.view.physicalSize = tamano; // Configura la pantalla.
+      tester.view.devicePixelRatio = 1; // Usa coordenadas lógicas.
+      addTearDown(tester.view.resetPhysicalSize); // Restablece el tamaño.
+      addTearDown(tester.view.resetDevicePixelRatio); // Restablece la escala.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PaginaVerCliente(
+            cliente: cliente,
+            cargarHistorial: (_) async => [],
+          ),
+        ),
+      ); // Abre el perfil real sin conexión.
+      await tester.pumpAndSettle(); // Espera la composición.
+      expect(
+        find.text('RUT: 123'),
+        findsOneWidget,
+      ); // Muestra el cliente correcto.
+      expect(
+        tester
+            .widgetList<TextFormField>(find.byType(TextFormField))
+            .every((campo) => !campo.enabled),
+        isTrue,
+      ); // Impide editar la información.
+      expect(
+        find.text('GUARDAR CAMBIOS'),
+        findsNothing,
+      ); // No ofrece escrituras desde Ver cliente.
+      expect(
+        tester.takeException(),
+        isNull,
+      ); // Exige ausencia de desbordamientos.
+    }); // Finaliza la consulta de una pantalla.
+  } // Finaliza las dos plataformas.
+
+  testWidgets(
+    'Clientes en móvil conserva los datos y acciones del listado completo',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(platform: TargetPlatform.android),
+          home: const PaginaClientes(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final tabla = tester.widget<TablaDatos>(find.byType(TablaDatos));
+      expect(tabla.nombresColumnas, [
+        'NOMBRE',
+        'NÚMERO',
+        'RUT',
+        'VEHÍCULOS',
+        'EDITAR',
+        'VER',
+      ]);
+      expect(tabla.celdasPersonalizadas.keys, containsAll([0, 4, 5]));
+      expect(tester.takeException(), isNull);
+    },
+  );
+  testWidgets('Clientes conserva el lápiz y añade la consulta al final', (
+    tester,
+  ) async {
+    // Comprueba la columna y su ruta independiente.
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(platform: TargetPlatform.windows),
+        home: const PaginaClientes(),
+      ),
+    ); // Abre la lista real.
+    await tester.pumpAndSettle(); // Espera la carga sin Supabase.
+    final tabla = tester.widget<TablaDatos>(
+      find.byType(TablaDatos),
+    ); // Obtiene los constructores de las acciones.
+    expect(
+      tabla.nombresColumnas.last,
+      'VER',
+    ); // Coloca la consulta después de editar.
+    expect(
+      tabla.celdasPersonalizadas.keys,
+      containsAll([4, 5]),
+    ); // Conserva ambas funciones separadas.
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) =>
+                tabla.celdasPersonalizadas[5]!(context, {'cliente': cliente}),
+          ),
+        ),
+      ),
+    ); // Construye la acción real de la última columna.
+    await tester.tap(
+      find.byTooltip('Ver cliente'),
+    ); // Abre el perfil con la lupa.
+    await tester.pumpAndSettle(); // Espera la navegación.
+    expect(
+      find.byType(PaginaVerCliente),
+      findsOneWidget,
+    ); // No abre la edición.
+    expect(
+      find.text('GUARDAR CAMBIOS'),
+      findsNothing,
+    ); // Mantiene la consulta sin cambios.
+  }); // Finaliza la verificación de la columna.
+
+  testWidgets('Cliente muestra todos sus vehículos y abre cada detalle', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final vehiculos = [
+      HistorialVehiculo(
+        id: 'ABCD12',
+        clienteNombre: cliente.nombre,
+        vehiculoNombre: 'Toyota Corolla (ABCD12)',
+        total: 124000,
+        fecha: 'ABCD12',
+      ),
+      HistorialVehiculo(
+        id: 'EFGH34',
+        clienteNombre: cliente.nombre,
+        vehiculoNombre: 'Kia Rio (EFGH34)',
+        total: 87000,
+        fecha: 'EFGH34',
+      ),
+    ];
+    final clienteConVehiculos = Cliente.fromJson({
+      'rut': '123',
+      'nombre': cliente.nombre,
+      'fono': cliente.numero,
+      'vehiculo_cliente': [
+        {
+          'patente': 'ABCD12',
+          'modelo_vehiculo': {
+            'modelo': 'Corolla',
+            'marca_vehiculo': {'marca': 'Toyota'},
+          },
+        },
+        {
+          'patente': 'EFGH34',
+          'modelo_vehiculo': {
+            'modelo': 'Rio',
+            'marca_vehiculo': {'marca': 'Kia'},
+          },
+        },
+      ],
+    });
+    expect(clienteConVehiculos.vehiculos, [
+      'Toyota Corolla (ABCD12)',
+      'Kia Rio (EFGH34)',
+    ]);
+    expect(clienteConVehiculos.patentesVehiculos, ['ABCD12', 'EFGH34']);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PaginaVerCliente(
+          cliente: clienteConVehiculos,
+          cargarHistorial: (_) async => [],
+          cargarVehiculos: (_) async => vehiculos,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('2 vehículos'), findsOneWidget);
+    expect(find.text('Toyota Corolla (ABCD12)'), findsOneWidget);
+    expect(find.text('Kia Rio (EFGH34)'), findsOneWidget);
+    await tester.tap(find.byTooltip('Ver detalle de EFGH34'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PaginaDetalleVehiculo), findsOneWidget);
+    expect(
+      tester
+          .widget<PaginaDetalleVehiculo>(find.byType(PaginaDetalleVehiculo))
+          .vehiculo
+          .id,
+      'EFGH34',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Ver cliente muestra una vista previa de sus ventas y abre el historial completo',
+    (tester) async {
+      // Comprueba la vista previa limitada y su acceso al historial.
+      tester.view.physicalSize = const Size(1440, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final ventas = [
+        for (var i = 1; i <= 7; i++)
+          VentaRegistro(
+            id: '$i',
+            rutCliente: cliente.id,
+            clienteNombre: cliente.nombre,
+            vehiculoNombre: 'Vehículo $i',
+            productosResumen: 'Producto $i',
+            total: i * 1000,
+            fecha: '10/10/2026',
+            items: [],
+          ),
+      ]; // Prepara más ventas de las que caben en la vista previa.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PaginaVerCliente(
+            cliente: cliente,
+            cargarHistorial: (_) async => ventas,
+            cargarVehiculos: (_) async => [],
+          ),
+        ),
+      ); // Abre el perfil real sin conexión.
+      await tester.pumpAndSettle(); // Espera la composición.
+      // La vista previa muestra únicamente las cinco ventas más recientes.
+      expect(find.text('Mostrando 5 de 7 ventas'), findsOneWidget);
+      expect(
+        tester.widget<TablaDatos>(find.byType(TablaDatos)).filas,
+        hasLength(5),
+      ); // No lista el historial completo en el perfil.
+      expect(
+        find.byTooltip('Ver detalle de venta'),
+        findsWidgets,
+      ); // Cada fila de la vista previa conserva su detalle.
+      // El botón abre el historial completo filtrado por este cliente.
+      await tester.tap(find.text('VER HISTORIAL\nCOMPLETO'));
+      await tester.pumpAndSettle(); // Espera la navegación.
+      expect(find.byType(PaginaVentasHistorial), findsOneWidget);
+      expect(
+        find.text('HISTORIAL DE VENTAS DE ${cliente.nombre}'),
+        findsOneWidget,
+      ); // Personaliza el título con el cliente consultado.
+      expect(find.text('VOLVER'), findsOneWidget); // Regresa al perfil.
+      expect(
+        tester.takeException(),
+        isNull,
+      ); // Exige ausencia de desbordamientos.
+    },
+  ); // Finaliza la vista previa del historial.
+
+  testWidgets(
+    'El historial completo se filtra por el cliente y omite su columna',
+    (tester) async {
+      // Comprueba el historial de un perfil sin mezclar otros clientes.
+      tester.view.physicalSize = const Size(1440, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final repositorio = VentasPendientesRepository(
+        clave: 'historial-cliente',
+      ); // Aísla las ventas locales de esta prueba.
+      await repositorio.guardar(
+        VentaPendiente(
+          id: 'pendiente-123',
+          rutCliente: cliente.id,
+          nombreCliente: cliente.nombre,
+          fonoCliente: cliente.numero,
+          patente: '',
+          fechaCreacion: DateTime(2026, 10, 10),
+          articulos: const [
+            ArticuloVentaPendiente(
+              codigo: '10',
+              nombre: 'Freno',
+              categoria: '',
+              precio: 1000,
+              cantidad: 1,
+              stock: 5,
+            ),
+          ],
+        ),
+      ); // Prepara una pendiente del cliente consultado.
+      final ventas = [
+        VentaRegistro(
+          id: '1',
+          rutCliente: cliente.id,
+          clienteNombre: cliente.nombre,
+          vehiculoNombre: 'Vehículo propio',
+          productosResumen: 'Freno',
+          total: 1000,
+          fecha: '',
+          items: [],
+        ),
+        const VentaRegistro(
+          id: '2',
+          rutCliente: '999',
+          clienteNombre: 'Otro cliente',
+          vehiculoNombre: 'Vehículo ajeno',
+          productosResumen: 'Disco',
+          total: 2000,
+          fecha: '',
+          items: [],
+        ),
+      ]; // Incluye una venta que pertenece a otro cliente.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PaginaVentasHistorial(
+            repositorioPendientes: repositorio,
+            cargarVentas: () async => ventas,
+            clienteId: cliente.id,
+            clienteNombre: cliente.nombre,
+          ),
+        ),
+      ); // Abre el historial filtrado desde el perfil.
+      await tester.pumpAndSettle(); // Espera ambas fuentes de datos.
+      expect(
+        find.text('HISTORIAL DE VENTAS DE ${cliente.nombre}'),
+        findsOneWidget,
+      ); // Muestra el alcance del filtro en el título.
+      final tabla = tester.widget<TablaDatos>(find.byType(TablaDatos));
+      expect(
+        tabla.nombresColumnas,
+        isNot(contains('CLIENTE')),
+      ); // Oculta la columna redundante al filtrar por cliente.
+      expect(
+        tabla.filas.map((fila) => fila['estado']),
+        unorderedEquals(['cerrada', 'pendiente']),
+      );
+      expect(
+        tabla.filas.every((fila) => fila['rut'].toString() == cliente.id),
+        isTrue,
+      ); // Excluye las ventas de otros clientes.
+      await tester.tap(find.byTooltip('ESTADO'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('VENTAS PENDIENTES'));
+      await tester.pumpAndSettle();
+      final pendiente = tester
+          .widget<TablaDatos>(find.byType(TablaDatos))
+          .filas
+          .single;
+      expect(pendiente['estado'], 'pendiente');
+      expect(pendiente['rut'].toString(), cliente.id);
+      expect(
+        find.byTooltip('PERIODO'),
+        findsOneWidget,
+      ); // El historial sigue filtrando por fecha.
+      expect(find.byTooltip('CLIENTE'), findsNothing); // Ya no aporta nada.
+      expect(find.text('VOLVER'), findsOneWidget); // Regresa al perfil.
+      expect(
+        tester.takeException(),
+        isNull,
+      ); // Exige ausencia de desbordamientos.
+    },
+  ); // Finaliza el historial filtrado por cliente.
+
+  testWidgets('Edición de cliente muestra todos sus vehículos', (tester) async {
+    final vehiculos = [
+      HistorialVehiculo(
+        id: 'ABCD12',
+        clienteNombre: cliente.nombre,
+        vehiculoNombre: 'Toyota Corolla (ABCD12)',
+        total: 124000,
+        fecha: 'ABCD12',
+      ),
+      HistorialVehiculo(
+        id: 'EFGH34',
+        clienteNombre: cliente.nombre,
+        vehiculoNombre: 'Kia Rio (EFGH34)',
+        total: 87000,
+        fecha: 'EFGH34',
+      ),
+    ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PaginaEditarCliente(
+          cliente: cliente,
+          cargarHistorial: (_) async => [],
+          cargarVehiculos: (_) async => vehiculos,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('2 vehículos'), findsOneWidget);
+    expect(find.text('Toyota Corolla (ABCD12)'), findsOneWidget);
+    expect(find.text('Kia Rio (EFGH34)'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Venta permite elegir entre las patentes del cliente', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final clienteConVehiculos = Cliente(
+      id: '123',
+      nombre: cliente.nombre,
+      numero: cliente.numero,
+      ultimaVenta: '',
+      vehiculo: 'ABCD12, EFGH34',
+      vehiculos: const ['Toyota Corolla (ABCD12)', 'Kia Rio (EFGH34)'],
+      patentesVehiculos: const ['ABCD12', 'EFGH34'],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PaginaCrearVenta(
+          cargarClientes: () async => [clienteConVehiculos],
+          cargarProductos: () async => [],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Seleccionar cliente'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cliente consultado · RUT: 123'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ActionChip), findsNWidgets(2));
+    await tester.tap(find.widgetWithText(ActionChip, 'EFGH34'));
+    await tester.pump();
+    expect(
+      tester
+          .widget<TextFormField>(find.byType(TextFormField).first)
+          .controller!
+          .text,
+      'EFGH34',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final pendiente in [false, true]) {
+    // Comprueba el botón compartido por ambos historiales.
+    testWidgets(
+      'Ver cliente abre su perfil desde historial pendiente=$pendiente',
+      (tester) async {
+        // Usa el RUT en lugar de buscar por nombre.
+        tester.view.physicalSize = const Size(
+          1440,
+          1000,
+        ); // Conserva el botón visible.
+        tester.view.devicePixelRatio = 1; // Usa coordenadas lógicas.
+        addTearDown(tester.view.resetPhysicalSize); // Restablece el tamaño.
+        addTearDown(tester.view.resetDevicePixelRatio); // Restablece la escala.
+        String? rutConsultado; // Conserva la clave solicitada.
+        const venta = VentaRegistro(
+          id: '99',
+          rutCliente: '123',
+          clienteNombre: 'Cliente consultado',
+          vehiculoNombre: 'ABCD12',
+          productosResumen: 'Freno',
+          total: 1000,
+          fecha: 'No registrada',
+          items: [
+            {'nombre': 'Freno', 'codigo': 'FRE01', 'total': 1000},
+          ],
+        ); // Conserva la relación con el cliente.
+        await tester.pumpWidget(
+          MaterialApp(
+            home: PaginaDetalleVenta(
+              idVenta: '99',
+              clienteNombre: cliente.nombre,
+              vehiculoNombre: 'ABCD12',
+              total: 1000,
+              desdeHistorial: false,
+              ventaInicial: venta,
+              esPendiente: pendiente,
+              cargarCliente: (rut) async {
+                rutConsultado = rut;
+                return cliente;
+              },
+              cargarHistorialCliente: (_) async => [],
+            ),
+          ),
+        ); // Abre la composición real del historial.
+        await tester.pumpAndSettle(); // Espera la carga del detalle.
+        expect(find.text('Cliente y vehículo'), findsOneWidget);
+        expect(find.text('RUT 123'), findsOneWidget);
+        expect(find.text(r'Subtotal $1.000'), findsOneWidget);
+        expect(find.text(r'Total $1.000'), findsOneWidget);
+        expect(find.text('Confirmar pago'), findsNothing);
+        final buscador = find.byType(TextField);
+        await tester.enterText(buscador, 'no-existe');
+        await tester.pumpAndSettle();
+        expect(find.text('No hay productos que coincidan.'), findsOneWidget);
+        expect(find.text(r'Total $1.000'), findsOneWidget);
+        await tester.enterText(buscador, 'fre01');
+        FocusManager.instance.primaryFocus?.unfocus();
+        await tester.pumpAndSettle();
+        expect(find.text('Freno'), findsOneWidget);
+        await tester.tap(
+          find.text('Ver cliente'),
+        ); // Consulta el perfil desde el historial.
+        await tester.pumpAndSettle(); // Espera la navegación.
+        expect(
+          rutConsultado,
+          '123',
+        ); // Consulta exactamente al cliente de la venta.
+        expect(
+          find.byType(PaginaVerCliente),
+          findsOneWidget,
+        ); // Abre la nueva vista de información.
+        expect(
+          find.text('RUT: 123'),
+          findsOneWidget,
+        ); // Muestra el perfil solicitado.
+        expect(
+          find.text('GUARDAR CAMBIOS'),
+          findsNothing,
+        ); // No permite modificarlo desde esta consulta.
+      },
+    ); // Finaliza un origen de historial.
+  } // Finaliza ambos historiales.
+
+  testWidgets(
+    'Ventas muestra el día e Historial conserva otros días y fechas desconocidas',
+    (tester) async {
+      // Comprueba la separación funcional sin inventar fechas.
+      tester.view.physicalSize = const Size(
+        1440,
+        1000,
+      ); // Usa una tabla de escritorio.
+      tester.view.devicePixelRatio = 1; // Usa coordenadas lógicas.
+      addTearDown(tester.view.resetPhysicalSize); // Restablece el tamaño.
+      addTearDown(tester.view.resetDevicePixelRatio); // Restablece la escala.
+      final hoy = DateTime(2026, 10, 16, 12); // Controla el día de trabajo.
+      final ayer = hoy.subtract(
+        const Duration(days: 1),
+      ); // Define un día distinto.
+      final repositorio = VentasPendientesRepository(
+        clave: 'prueba',
+      ); // Aísla las ventas locales.
+      for (final fecha in [hoy, ayer]) {
+        // Prepara dos pendientes de distintos días.
+        await repositorio.guardar(
+          VentaPendiente(
+            id: fecha.toString(),
+            rutCliente: '123',
+            nombreCliente: 'Pendiente',
+            fonoCliente: '456',
+            patente: '',
+            fechaCreacion: fecha,
+            articulos: [
+              const ArticuloVentaPendiente(
+                codigo: '10',
+                nombre: 'Freno',
+                categoria: '',
+                precio: 1000,
+                cantidad: 1,
+                stock: 5,
+              ),
+            ],
+          ),
+        ); // Conserva la fecha original del borrador.
+      } // Finaliza las pendientes.
+      final ventas = [
+        for (final fecha in <DateTime?>[hoy, ayer, null])
+          VentaRegistro(
+            id: fecha.toString(),
+            rutCliente: '123',
+            clienteNombre: 'Cliente cerrado',
+            vehiculoNombre: '',
+            productosResumen: 'Freno',
+            total: 1000,
+            fecha: '',
+            fechaRegistro: fecha,
+            items: [],
+          ),
+      ]; // Incluye una venta antigua sin fecha conocida.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PaginaVentas(
+            repositorioPendientes: repositorio,
+            cargarVentas: () async => ventas,
+            ahora: () => hoy,
+          ),
+        ),
+      ); // Abre exclusivamente el día actual.
+      await tester.pumpAndSettle(); // Espera ambas fuentes de datos.
+      expect(
+        tester.widget<TablaDatos>(find.byType(TablaDatos)).filas,
+        hasLength(2),
+      ); // Muestra una pendiente y una cerrada del día.
+      expect(
+        find.text('REGISTRAR\nVENTA NUEVA'),
+        findsNothing,
+      ); // Retira el botón grande de registro.
+      expect(find.text('AGREGAR VENTA'), findsNothing);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PaginaVentasHistorial(
+            repositorioPendientes: repositorio,
+            cargarVentas: () async => ventas,
+          ),
+        ),
+      ); // Abre la página independiente de historial.
+      await tester.pumpAndSettle(); // Recupera el catálogo completo.
+      expect(
+        tester.widget<TablaDatos>(find.byType(TablaDatos)).filas,
+        hasLength(5),
+      ); // Incluye las cerradas y las pendientes de cualquier fecha.
+      await tester.tap(find.byTooltip('ESTADO'));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.widgetWithText(MenuItemButton, 'TODAS'),
+          matching: find.byIcon(Icons.radio_button_checked),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('VENTAS PENDIENTES'));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TablaDatos>(find.byType(TablaDatos))
+            .filas
+            .map((fila) => fila['fecha']),
+        unorderedEquals([hoy, ayer]),
+      );
+      await tester.tap(find.text('TODAS'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TablaDatos>(find.byType(TablaDatos)).filas,
+        hasLength(5),
+      );
+      await tester.tap(find.text('VENTAS CERRADAS'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TablaDatos>(find.byType(TablaDatos)).filas,
+        hasLength(3),
+      );
+      await tester.tapAt(const Offset(1430, 990));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('LIMPIAR'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TablaDatos>(find.byType(TablaDatos)).filas,
+        hasLength(5),
+      );
+      expect(
+        find.text('REGISTRAR\nVENTA NUEVA'),
+        findsNothing,
+      ); // El historial tampoco ofrece registrar una venta nueva.
+      expect(find.text('AGREGAR VENTA'), findsNothing);
+      expect(tester.takeException(), isNull); // Exige una distribución válida.
+    },
+  ); // Finaliza la comparación entre día e historial.
+
+  test('VentaRegistro conserva fecha del servidor y nunca asigna una fecha a ventas antiguas', () {
+    // Comprueba compatibilidad antes y después de aplicar la columna.
+    final reciente = VentaRegistro.fromJson({
+      'id': 1,
+      'rut_cliente': 123,
+      'fecha_registro': '2026-10-16T15:30:00Z',
+    }); // Simula una venta con la nueva fecha.
+    final antigua = VentaRegistro.fromJson({
+      'id': 2,
+      'rut_cliente': 123,
+    }); // Simula una venta anterior a la modificación.
+    expect(
+      reciente.fechaRegistro!.toUtc(),
+      DateTime.utc(2026, 10, 16, 15, 30),
+    ); // Conserva el instante registrado por el servidor.
+    expect(
+      antigua.fechaRegistro,
+      isNull,
+    ); // No inventa un día para la venta antigua.
+    expect(reciente.rutCliente, '123'); // Conserva el vínculo al perfil.
+  }); // Finaliza la compatibilidad de fecha.
+
+  testWidgets(
+    'la fecha YYYY-MM-DD de Supabase aparece en ventas del mismo día',
+    (tester) async {
+      // Verifica el formato utilizado al ingresar fechas manualmente.
+      tester.view.physicalSize = const Size(
+        1440,
+        1000,
+      ); // Conserva visible la tabla del día.
+      tester.view.devicePixelRatio = 1; // Usa coordenadas lógicas.
+      addTearDown(tester.view.resetPhysicalSize); // Restablece el tamaño.
+      addTearDown(tester.view.resetDevicePixelRatio); // Restablece la escala.
+      final venta = VentaRegistro.fromJson({
+        'id': 1,
+        'rut_cliente': 123,
+        'fecha_registro': '2026-10-16',
+        'cliente': {'nombre': 'Venta manual de hoy'},
+      }); // Simula la respuesta de una columna DATE.
+      expect(
+        venta.fechaRegistro,
+        DateTime(2026, 10, 16),
+      ); // Conserva el día 16 sin convertirlo a la víspera.
+      expect(
+        venta.fechaRegistro!.isUtc,
+        isFalse,
+      ); // Trata una fecha sin hora como un día local.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PaginaVentas(
+            repositorioPendientes: VentasPendientesRepository(
+              clave: 'fecha-manual',
+            ),
+            cargarVentas: () async => [venta],
+            ahora: () => DateTime(2026, 10, 16, 12),
+          ),
+        ),
+      ); // Abre la vista diaria con el mismo día ingresado en Supabase.
+      await tester.pumpAndSettle(); // Espera la carga de ventas.
+      expect(
+        tester
+            .widget<TablaDatos>(find.byType(TablaDatos))
+            .filas
+            .single['cliente'],
+        'Venta manual de hoy',
+      ); // Incluye la venta en el día correcto.
+      expect(
+        tester.takeException(),
+        isNull,
+      ); // Exige ausencia de errores de presentación.
+    },
+  ); // Finaliza la regresión del formato de fecha.
+
+  testWidgets('Inicio actualiza el total de ventas del día', (tester) async {
+    tester.view.physicalSize = const Size(1440, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final navegador = GlobalKey<NavigatorState>();
+    final pendientes = VentasPendientesRepository(clave: 'conteo-inicio');
+    final hoy = DateTime.now();
+    final ayer = DateTime(hoy.year, hoy.month, hoy.day - 1);
+    Future<void> guardar(String id, DateTime fecha) => pendientes.guardar(
+      VentaPendiente(
+        id: id,
+        rutCliente: '123',
+        nombreCliente: 'Cliente',
+        fonoCliente: '456',
+        patente: '',
+        fechaCreacion: fecha,
+        articulos: const [
+          ArticuloVentaPendiente(
+            codigo: '10',
+            nombre: 'Freno',
+            categoria: '',
+            precio: 1000,
+            cantidad: 1,
+            stock: 5,
+          ),
+        ],
+      ),
+    );
+    await guardar('de-ayer', ayer);
+    await guardar('de-hoy', hoy);
+
+    var cerradas = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorKey: navegador,
+        theme: ThemeData(platform: TargetPlatform.windows),
+        home: PaginaInicio(
+          repositorioPendientes: pendientes,
+          contarVentasCerradas: (_) async => cerradas,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('1'), findsOneWidget);
+
+    await guardar('otra-de-hoy', hoy);
+    await tester.pumpAndSettle();
+    expect(find.text('2'), findsOneWidget);
+
+    await tester.tap(find.text('VENTAS DEL\nDÍA'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PaginaVentas), findsOneWidget);
+    cerradas = 1;
+    navegador.currentState!.pop();
+    await tester.pumpAndSettle();
+    expect(find.text('3'), findsOneWidget);
+  });
+
+  for (final historial in [true, false]) {
+    // Comprueba las dos tarjetas modificadas de Inicio.
+    testWidgets(
+      'Inicio abre ${historial ? 'historial completo' : 'nueva venta'}',
+      (tester) async {
+        // Verifica los accesos solicitados.
+        tester.view.physicalSize = const Size(
+          1440,
+          1000,
+        ); // Conserva las tarjetas visibles.
+        tester.view.devicePixelRatio = 1; // Usa coordenadas lógicas.
+        addTearDown(tester.view.resetPhysicalSize); // Restablece el tamaño.
+        addTearDown(tester.view.resetDevicePixelRatio); // Restablece la escala.
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ThemeData(platform: TargetPlatform.windows),
+            home: const PaginaInicio(modoPrueba: true),
+          ),
+        ); // Construye la página principal real.
+        await tester.pumpAndSettle(); // Espera la distribución.
+        await tester.tap(
+          find.text(historial ? 'HISTORIAL\nDE VENTAS' : 'NUEVA VENTA'),
+        ); // Pulsa la tarjeta correspondiente.
+        await tester.pumpAndSettle(); // Espera la navegación.
+        expect(
+          historial
+              ? find.byType(PaginaVentasHistorial)
+              : find.byType(PaginaCrearVenta),
+          findsOneWidget,
+        ); // Abre la página correcta.
+        expect(
+          tester.takeException(),
+          isNull,
+        ); // Exige ausencia de fallos visuales.
+      },
+    ); // Finaliza la comprobación de una tarjeta.
+  } // Finaliza las tarjetas de Inicio.
+
+  testWidgets('El selector de cliente se abre y cierra en móvil', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(home: PaginaCrearVenta(cargarClientes: () async => [])),
+    );
+    await tester.tap(find.text('Seleccionar cliente'));
+    await tester.pumpAndSettle();
+    expect(find.text('No se encontraron clientes.'), findsOneWidget);
+    await tester.tap(find.byTooltip('Cerrar selección'));
+    await tester.pumpAndSettle();
+    expect(find.byType(Dialog), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+} // Finaliza las verificaciones de navegación y presentación.

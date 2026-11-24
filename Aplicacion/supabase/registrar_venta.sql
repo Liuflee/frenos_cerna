@@ -1,0 +1,77 @@
+CREATE OR REPLACE FUNCTION public.registrar_venta(
+  p_rut_cliente integer,
+  p_patente_vehiculo text,
+  p_detalles jsonb,
+  p_iva integer DEFAULT 19
+)
+RETURNS integer
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  v_id_venta integer;
+  v_codigo_producto text;
+  v_sku public.producto.sku%TYPE;
+  v_cantidad integer;
+  v_precio integer;
+  v_stock integer;
+  v_detalle jsonb;
+BEGIN
+  IF jsonb_typeof(p_detalles) <> 'array' OR jsonb_array_length(p_detalles) = 0 THEN
+    RAISE EXCEPTION 'La venta debe incluir al menos un producto.';
+  END IF;
+
+  INSERT INTO public.venta (iva, rut_cliente, patente_vehiculo)
+  VALUES (p_iva, p_rut_cliente, NULLIF(p_patente_vehiculo, ''))
+  RETURNING id INTO v_id_venta;
+
+  FOR v_detalle IN SELECT value FROM jsonb_array_elements(p_detalles)
+  LOOP
+    v_codigo_producto := v_detalle ->> 'codigo_producto';
+    v_cantidad := (v_detalle ->> 'cantidad')::integer;
+
+    IF v_cantidad <= 0 THEN
+      RAISE EXCEPTION 'La cantidad debe ser mayor que cero.';
+    END IF;
+
+    BEGIN
+      SELECT precio, stock, sku
+        INTO STRICT v_precio, v_stock, v_sku
+        FROM public.producto
+        WHERE codigo_producto = v_codigo_producto
+        FOR UPDATE;
+    EXCEPTION
+      WHEN no_data_found THEN
+        RAISE EXCEPTION 'No existe el producto %.', v_codigo_producto;
+      WHEN too_many_rows THEN
+        RAISE EXCEPTION 'El código de producto % identifica más de un SKU.', v_codigo_producto;
+    END;
+
+    IF v_sku IS NULL THEN
+      RAISE EXCEPTION 'El producto % no tiene SKU.', v_codigo_producto;
+    END IF;
+    IF v_stock < v_cantidad THEN
+      RAISE EXCEPTION 'Stock insuficiente para el producto %.', v_codigo_producto;
+    END IF;
+
+    UPDATE public.producto
+      SET stock = stock - v_cantidad
+      WHERE codigo_producto = v_codigo_producto AND sku = v_sku;
+
+    INSERT INTO public.detalle_venta_producto (
+      id_venta,
+      codigo_producto,
+      sku,
+      total
+    )
+    VALUES (
+      v_id_venta,
+      v_codigo_producto,
+      v_sku,
+      v_precio * v_cantidad
+    );
+  END LOOP;
+
+  RETURN v_id_venta;
+END;
+$$;

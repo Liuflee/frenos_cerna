@@ -1,0 +1,477 @@
+import 'dart:async';
+
+import 'package:frenos_cerna/shared/widgets/navegacion_inferior.dart';
+import 'package:frenos_cerna/features/escaner/pagina_escaner_producto.dart';
+import 'package:frenos_cerna/core/tema/paleta_taller.dart';
+import 'package:frenos_cerna/features/ventas/presentation/pagina_crear_ventas.dart'; // Abre directamente el registro de una venta.
+import 'package:frenos_cerna/features/ventas/presentation/pagina_ventas_historial.dart'; // Abre el historial completo.
+import 'package:frenos_cerna/core/data/perfil_sesion.dart'; // Conserva el perfil autenticado para toda la navegación.
+// Importaciones
+import 'package:material_ui/material_ui.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+import 'package:frenos_cerna/features/autenticacion/data/autenticacion_repository.dart';
+import 'package:frenos_cerna/shared/widgets/barra_superior.dart';
+import 'package:frenos_cerna/shared/widgets/menu_lateral.dart';
+import 'package:frenos_cerna/shared/widgets/carta_navegacion.dart';
+
+import 'package:frenos_cerna/features/inventario/pagina_inventario.dart';
+import 'package:frenos_cerna/features/notificaciones/pagina_notificaciones.dart';
+import 'package:frenos_cerna/features/ventas/presentation/pagina_ventas.dart';
+import 'package:frenos_cerna/features/ventas/data/ventas_pendientes_repository.dart';
+import 'package:frenos_cerna/features/ventas/data/ventas_repository.dart';
+
+class PaginaInicio extends StatefulWidget {
+  final PerfilUsuario? perfilUsuario;
+  final bool modoPrueba;
+  final VoidCallback? onSalirModoPrueba;
+  final VentasPendientesRepository? repositorioPendientes;
+  final Future<int> Function(DateTime)? contarVentasCerradas;
+
+  // Constructor de la clase PaginaInicio
+  const PaginaInicio({
+    super.key,
+    this.perfilUsuario,
+    this.modoPrueba = false,
+    this.onSalirModoPrueba,
+    this.repositorioPendientes,
+    this.contarVentasCerradas,
+  });
+
+  @override
+  State<PaginaInicio> createState() => _PaginaInicioState();
+}
+
+class _PaginaInicioState extends State<PaginaInicio> {
+  late final VentasPendientesRepository _pendientes;
+  StreamSubscription<void>? _cambiosPendientes;
+  Future<int?>? _totalVentasDelDia;
+  bool _inicioVisible = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pendientes =
+        widget.repositorioPendientes ?? VentasPendientesRepository.instancia;
+    _cambiosPendientes = _pendientes.cambios.listen((_) {
+      if (_inicioVisible) setState(() => _totalVentasDelDia = _contarVentas());
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // También detecta el regreso mediante la barra inferior de Android.
+    final visible = ModalRoute.isCurrentOf(context) ?? true;
+    if (visible && !_inicioVisible) _totalVentasDelDia = _contarVentas();
+    _inicioVisible = visible;
+  }
+
+  Future<int?> _contarVentas() async {
+    final hoy = DateTime.now();
+    final contarCerradas =
+        widget.contarVentasCerradas ??
+        (widget.modoPrueba ? null : VentaRegistro.contarDelDia);
+    try {
+      final pendientes = await _pendientes.obtenerTodas();
+      final cerradas = await contarCerradas?.call(hoy) ?? 0;
+      return cerradas +
+          pendientes
+              .where(
+                (venta) =>
+                    DateUtils.isSameDay(venta.fechaCreacion?.toLocal(), hoy),
+              )
+              .length;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(_cambiosPendientes?.cancel());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => PaginaTematica(builder: _pagina);
+  Widget _pagina(BuildContext context) {
+    final perfilUsuario = widget.perfilUsuario;
+    final modoPrueba = widget.modoPrueba;
+    final plataforma = Theme.of(context).platform; // Identifica el dispositivo sin depender del tamaño de la ventana.
+    final esAndroid = !kIsWeb && plataforma == TargetPlatform.android;
+    final esMovil =
+        plataforma == TargetPlatform.android ||
+        plataforma == TargetPlatform.iOS; // Reserva el escaneo para celulares.
+    if (perfilUsuario != null && !modoPrueba) {
+      PerfilSesion.conservar(
+        perfilUsuario,
+      ); // Conserva el perfil cargado al iniciar sesión para las demás vistas.
+    }
+    return Scaffold(
+      // Accesos principales en pantallas pequeñas.
+      drawer: MenuLateral.desplegable(context, activo: 'Página Principal'),
+      bottomNavigationBar: NavegacionInferior.para(
+        context,
+        activo: 'Página Principal',
+      ),
+      // Color de fondo de la página
+      backgroundColor: PaletaTaller.de(context).fondo,
+
+      // Cuerpo de la página
+      body: LayoutBuilder(
+        // Se obtienen las dimensiones disponibles de la ventana
+        builder: (context, constraints) {
+          // Dimensiones de la ventana
+          final double ancho = constraints.maxWidth;
+
+          // Se crea la distribución vertical de la página
+          return Column(
+            children: [
+              // BARRA SUPERIOR
+              SizedBox(
+                width: ancho,
+                height: DimensionesNavegacion.altoBarra(ancho),
+
+                // Se llama el widget de barra superior
+                child: BarraSuperior(
+                  tituloPagina: 'Página Principal',
+                  nombreUsuario: perfilUsuario?.nombre, // Recupera el perfil compartido al volver desde el menú.
+                  rolUsuario: modoPrueba
+                      ? 'Sin sesión'
+                      : perfilUsuario?.rol.etiqueta,
+                  onCerrarSesion: modoPrueba
+                      ? () async => widget.onSalirModoPrueba?.call()
+                      : null,
+                ),
+              ),
+
+              // ZONA DE WIDGETS
+              Expanded(
+                // Ocupa la altura restante de la página
+                child: Row(
+                  // Extiende los elementos verticalmente
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+
+                  children: [
+                    // BARRA LATERAL
+                    if (DimensionesNavegacion.anchoMenuEn(context) > 0)
+                      SizedBox(
+                        width: DimensionesNavegacion.anchoMenu(ancho),
+
+                        // Se llama el widget del menú lateral
+                        child: const MenuLateral(activo: 'Página Principal'),
+                      ),
+
+                    // CONTENIDO PRINCIPAL
+                    Expanded(
+                      // Ocupa el ancho restante
+                      child: Container(
+                        // Estilos del contenedor principal
+                        width: double.infinity,
+
+                        // Padding superior reducido a 12
+                        // para acercar el contenido a la barra superior
+                        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+
+                        // Se calculan las dimensiones del contenido
+                        child: LayoutBuilder(
+                          builder: (context, espacio) {
+                            // Ancho disponible del contenido principal
+                            final double anchoContenido = espacio.maxWidth;
+
+                            // Alto disponible del contenido principal
+                            final double altoContenido = espacio.maxHeight;
+
+                            // Separación entre tarjetas
+                            const double separacion = 20;
+
+                            // DIMENSIONES DE TARJETAS IMPORTANTES
+
+                            // Calcula el ancho proporcional
+                            // con un mínimo de 170 y máximo de 260
+                            final double anchoImportante = esAndroid
+                                ? (anchoContenido - separacion) / 2
+                                : (anchoContenido * 0.17)
+                                      .clamp(170.0, 260.0)
+                                      .toDouble();
+
+                            // Calcula el alto proporcional
+                            // con un mínimo de 170 y máximo de 240
+                            final double altoImportante = (altoContenido * 0.27)
+                                .clamp(170.0, 240.0)
+                                .toDouble();
+
+                            // DIMENSIONES DE TARJETAS DE TRABAJO
+
+                            // Se calcula el ancho necesario para
+                            // distribuir tres tarjetas en una fila
+                            // descontando las dos separaciones
+                            final double anchoTrabajo = esAndroid
+                                ? anchoContenido
+                                : ((anchoContenido - separacion * 2) / 3)
+                                      .clamp(160.0, 360.0)
+                                      .toDouble();
+
+                            // Calcula el alto proporcional
+                            // con un mínimo de 110 y máximo de 160
+                            final double altoTrabajo = esAndroid
+                                ? 90.0
+                                : (altoContenido * 0.17)
+                                      .clamp(110.0, 160.0)
+                                      .toDouble();
+
+                            // Función que permite navegar a otra página
+                            void abrirPagina(Widget pagina) {
+                              Navigator.push(
+                                context,
+
+                                MaterialPageRoute(builder: (context) => pagina),
+                              );
+                            }
+
+                            // Permite desplazarse verticalmente
+                            // si el contenido supera el espacio disponible
+                            return SingleChildScrollView(
+                              // Se distribuyen las secciones verticalmente
+                              child: Column(
+                                // Ocupa todo el ancho disponible
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+
+                                // Posiciona el contenido desde arriba
+                                // evitando espacios vacíos innecesarios
+                                mainAxisAlignment: MainAxisAlignment.start,
+
+                                children: [
+                                  // SECCIÓN IMPORTANTE
+
+                                  // Título de la sección
+                                  const Text(
+                                    'IMPORTANTE',
+
+                                    textAlign: TextAlign.center,
+
+                                    style: TextStyle(
+                                      fontSize: 28,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+
+                                  // Separación entre título y tarjetas
+                                  const SizedBox(height: 20),
+
+                                  // Contenedor de tarjetas importantes
+                                  Wrap(
+                                    // Separación horizontal
+                                    spacing: separacion,
+
+                                    // Separación vertical
+                                    runSpacing: separacion,
+
+                                    // Centra las tarjetas
+                                    alignment: WrapAlignment.center,
+
+                                    children: [
+                                      FutureBuilder<int?>(
+                                        future: _totalVentasDelDia,
+                                        builder: (context, estado) {
+                                          final cargado =
+                                              estado.connectionState ==
+                                              ConnectionState.done;
+                                          final tarjeta = CartaNavegacion(
+                                            ancho: anchoImportante,
+                                            alto: altoImportante,
+                                            icono: Icons.people_outline,
+                                            numero: cargado
+                                                ? estado.data?.toString() ?? '—'
+                                                : '…',
+                                            texto: 'VENTAS DEL\nDÍA',
+                                            alPresionar: () => abrirPagina(
+                                              PaginaVentas(
+                                                repositorioPendientes:
+                                                    _pendientes,
+                                              ),
+                                            ),
+                                          );
+                                          return cargado && !estado.hasData
+                                              ? Tooltip(
+                                                  message: 'No se pudo cargar el total de ventas del día',
+                                                  child: tarjeta,
+                                                )
+                                              : tarjeta;
+                                        },
+                                      ),
+
+                                      // Android ofrece las consultas del taller desde Inicio.
+                                      if (!esAndroid)
+                                        CartaNavegacion(
+                                          ancho: anchoImportante,
+                                          alto: altoImportante,
+                                          icono: Icons.add,
+
+                                          texto: 'NUEVA VENTA',
+
+                                          color: PaletaTaller.de(context)
+                                              .adaptar(Color(0xFFD96363)), // Usa el rojo compartido por las acciones de registro.
+                                          // Abre directamente el registro de una nueva venta
+                                          alPresionar: () {
+                                            abrirPagina(
+                                              const PaginaCrearVenta(),
+                                            );
+                                          },
+                                        ),
+
+                                      // Tarjeta de escaneo en móvil y acceso a datos en escritorio.
+                                      CartaNavegacion(
+                                        ancho: anchoImportante,
+                                        alto: altoImportante,
+                                        icono: esMovil
+                                            ? Icons.barcode_reader
+                                            : Icons.bar_chart, // Representa la acción disponible en cada dispositivo.
+                                        texto: esMovil
+                                            ? 'ESCANEAR PRODUCTO'
+                                            : 'DATOS',
+
+                                        // Color opcional
+                                        // color: Colors.orange[100],
+
+                                        // Mantiene el escaneo pendiente y conserva la ruta de datos en escritorio.
+                                        alPresionar: esMovil
+                                            ? () => escanearProducto(context)
+                                            : () => Navigator.pushNamed(
+                                                context,
+                                                '/data',
+                                              ),
+                                      ),
+                                    ],
+                                  ),
+
+                                  // SEPARACIÓN ENTRE SECCIONES
+                                  const SizedBox(height: 36),
+
+                                  // SECCIÓN TRABAJO
+
+                                  // Título de la sección
+                                  const Text(
+                                    'TRABAJO',
+
+                                    textAlign: TextAlign.center,
+
+                                    style: TextStyle(
+                                      fontSize: 28,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+
+                                  // Separación entre título y tarjetas
+                                  const SizedBox(height: 20),
+
+                                  // PRIMERA FILA DE TRABAJO
+                                  // Contiene tres tarjetas
+                                  Wrap(
+                                    spacing: separacion,
+                                    runSpacing: separacion,
+                                    alignment: WrapAlignment.center,
+
+                                    children: [
+                                      // Tarjeta historial de vehículos
+                                      CartaNavegacion(
+                                        ancho: anchoTrabajo,
+                                        alto: altoTrabajo,
+                                        icono: Icons.menu_book,
+                                        texto: 'HISTORIAL\nDE VENTAS',
+
+                                        // Abre el historial completo de ventas
+                                        alPresionar: () {
+                                          abrirPagina(
+                                            const PaginaVentasHistorial(),
+                                          );
+                                        },
+                                      ),
+
+                                      // Tarjeta inventario
+                                      CartaNavegacion(
+                                        ancho: anchoTrabajo,
+                                        alto: altoTrabajo,
+                                        icono: Icons.cases_outlined,
+                                        texto: 'INVENTARIO',
+
+                                        // Navega a inventario
+                                        alPresionar: () {
+                                          abrirPagina(const PaginaInventario());
+                                        },
+                                      ),
+
+                                      // Tarjeta notificaciones
+                                      CartaNavegacion(
+                                        ancho: anchoTrabajo,
+                                        alto: altoTrabajo,
+                                        icono: Icons.bookmark_add_outlined,
+                                        texto: 'RESERVAR PRODUCTO',
+
+                                        // Conserva el acceso a las opciones de reserva
+                                        alPresionar: () {
+                                          abrirPagina(
+                                            const PaginaNotificaciones(),
+                                          );
+                                        },
+                                      ),
+                                    ],
+                                  ),
+
+                                  // Separación entre las filas de trabajo
+                                  const SizedBox(height: 20),
+
+                                  // Accesos adicionales de escritorio.
+                                  if (!esAndroid)
+                                    Wrap(
+                                      spacing: separacion,
+                                      runSpacing: separacion,
+                                      alignment: WrapAlignment.center,
+
+                                      children: [
+                                        // Tarjeta ventas
+                                        CartaNavegacion(
+                                          ancho: anchoTrabajo,
+                                          alto: altoTrabajo,
+                                          icono: Icons.attach_money,
+                                          texto: 'VENTAS',
+
+                                          // Navega a ventas
+                                          alPresionar: () {
+                                            abrirPagina(const PaginaVentas());
+                                          },
+                                        ),
+
+                                        // Abre el resumen del negocio.
+                                        CartaNavegacion(
+                                          ancho: anchoTrabajo,
+                                          alto: altoTrabajo,
+                                          icono: Icons.dashboard_outlined,
+                                          texto: 'DASHBOARD',
+
+                                          alPresionar: () =>
+                                              Navigator.pushNamed(
+                                                context,
+                                                '/dashboard',
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
